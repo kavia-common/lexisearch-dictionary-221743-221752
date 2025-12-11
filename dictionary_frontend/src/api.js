@@ -16,7 +16,7 @@ export function getApiBaseUrl() {
 
   const cleaned =
     typeof envUrl === "string" && envUrl.trim().length > 0
-      ? envUrl.replace(/\/+$/, "")
+      ? envUrl.replace(/\/*$/, "")
       : null;
 
   return cleaned || "https://api.dictionaryapi.dev";
@@ -30,13 +30,9 @@ const safeString = (v) => (typeof v === "string" ? v : "");
 
 /**
  * Normalize the public dictionaryapi.dev payload into our internal shape.
- * Input can be array of entries; we map each to:
- * {
- *   word, phonetic, phonetics: [{text, audio}],
- *   meanings: [{ partOfSpeech, definitions: [{definition, example}], synonyms[], antonyms[] }]
- * }
+ * Adds a lang field to the normalized result for downstream logic.
  */
-function normalizePublicApi(data) {
+function normalizePublicApi(data, lang = "en") {
   const entries = Array.isArray(data) ? data : [];
   return entries.map((e) => {
     const word = safeString(e?.word);
@@ -54,19 +50,15 @@ function normalizePublicApi(data) {
       synonyms: safeArray(m?.synonyms).filter(Boolean),
       antonyms: safeArray(m?.antonyms).filter(Boolean),
     }));
-    return { word, phonetic, phonetics, meanings };
+    return { word, phonetic, phonetics, meanings, lang };
   });
 }
 
 /**
- * Normalize custom backend (/define?word=<w>) response into the same internal shape.
- * Expect flexible structures; we attempt to coerce fields where possible.
- * Supported input examples:
- * { word, phonetic?, phonetics?:[{text?, audio?}], meanings:[{ partOfSpeech, definitions:[{definition, example?}], synonyms?, antonyms? }] }
- * or a list of entries with the above shape.
+ * Normalize custom backend (/define?word=<w>&lang=<code>) response.
+ * Adds a lang field to the normalized result.
  */
-function normalizeCustomApi(data) {
-  // Some backends may return a single object or {result: [...]} wrapper
+function normalizeCustomApi(data, lang = "en") {
   const rawEntries = Array.isArray(data)
     ? data
     : Array.isArray(data?.result)
@@ -97,36 +89,47 @@ function normalizeCustomApi(data) {
         antonyms: safeArray(m?.antonyms).filter(Boolean),
       };
     });
-    return { word, phonetic, phonetics, meanings };
+    return { word, phonetic, phonetics, meanings, lang };
   });
 }
 
+/**
+ * Helpers
+ */
+function isPublicBase(base) {
+  return /dictionaryapi\.dev/i.test(base || "");
+}
+
 // PUBLIC_INTERFACE
-export async function fetchDefinitions(word) {
+export async function fetchDefinitions(word, lang = "en") {
   /**
    * Fetch word data and return a normalized array of entries.
-   * Strategy:
-   * 1) If REACT_APP_API_BASE is set and not the public API, call GET /define?word=<w>
-   * 2) Else, call public API: https://api.dictionaryapi.dev/api/v2/entries/en/<word>
-   * Always normalize to a single internal shape so UI never crashes on missing fields.
+   * Strategy with language:
+   * 1) If custom backend provided, GET /define?word=<w>&lang=<code>
+   * 2) Else, for en use dictionaryapi.dev; for non-en show friendly notice via empty [].
    */
   const base = getApiBaseUrl();
-  const isPublic = /dictionaryapi\.dev/i.test(base);
+  const usePublic = isPublicBase(base);
 
   let url = "";
-  if (!isPublic && base) {
-    // Prefer custom backend if provided
-    url = `${base}/define?word=${encodeURIComponent(word)}`;
+  if (!usePublic && base) {
+    url = `${base}/define?word=${encodeURIComponent(word)}&lang=${encodeURIComponent(lang)}`;
   } else {
+    // Public fallback only supports English
     url = `${base}/api/v2/entries/en/${encodeURIComponent(word)}`;
   }
 
+  // First attempt
   let res;
   try {
     res = await fetch(url, { headers: { Accept: "application/json" } });
   } catch (err) {
-    // If custom backend failed (network or CORS), try public API as a fallback
-    if (!isPublic) {
+    // If backend failed, try English public fallback only for en
+    if (!usePublic) {
+      if (lang !== "en") {
+        // Non-English fallback not supported publicly; return empty
+        return [];
+      }
       const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(
         word
       )}`;
@@ -134,17 +137,21 @@ export async function fetchDefinitions(word) {
         headers: { Accept: "application/json" },
       });
       if (!fbRes.ok) {
+        if (fbRes.status === 404) return [];
         throw new Error(`Request failed with status ${fbRes.status}`);
       }
       const fbData = await fbRes.json();
-      return normalizePublicApi(fbData);
+      return normalizePublicApi(fbData, "en");
     }
     throw err;
   }
 
   if (!res.ok) {
-    // On custom backend failure, fallback to public API; on public, handle 404 as "no results"
-    if (!isPublic) {
+    if (!usePublic) {
+      if (lang !== "en") {
+        // For non-English, public fallback is not available; return empty gracefully
+        return [];
+      }
       const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(
         word
       )}`;
@@ -152,7 +159,7 @@ export async function fetchDefinitions(word) {
         headers: { Accept: "application/json" },
       });
       if (!fbRes.ok) {
-        // Try to read error message if any
+        if (fbRes.status === 404) return [];
         let msg = `Request failed with status ${fbRes.status}`;
         try {
           const errJson = await fbRes.json();
@@ -160,18 +167,12 @@ export async function fetchDefinitions(word) {
             msg = `${errJson.title || "Error"}: ${errJson.message || ""}`.trim();
           }
         } catch (_) {}
-        // If the public API reports 404, treat it as no results instead of throwing
-        if (fbRes.status === 404) {
-          return [];
-        }
         throw new Error(msg);
       }
       const fbData = await fbRes.json();
-      return normalizePublicApi(fbData);
+      return normalizePublicApi(fbData, "en");
     } else {
-      // Public API branch
       if (res.status === 404) {
-        // 404 from dictionaryapi.dev indicates no match; return empty list gracefully
         return [];
       }
       let msg = `Request failed with status ${res.status}`;
@@ -186,10 +187,11 @@ export async function fetchDefinitions(word) {
   }
 
   const data = await res.json();
-  if (!isPublic) {
-    return normalizeCustomApi(data);
+  if (!usePublic) {
+    return normalizeCustomApi(data, lang);
   }
-  return normalizePublicApi(data);
+  // If using public, we fetched en always
+  return normalizePublicApi(data, "en");
 }
 
 /**
@@ -197,26 +199,25 @@ export async function fetchDefinitions(word) {
  */
 
 // PUBLIC_INTERFACE
-export function getWotdBackendUrl() {
+export function getWotdBackendUrl(lang = "en") {
   /**
    * Returns the full WOTD endpoint if a custom backend base is configured, else null.
-   * Endpoint: GET <BASE>/word-of-the-day
+   * Endpoint: GET <BASE>/word-of-the-day?lang=<code>
    */
   const base = getApiBaseUrl();
-  if (!/dictionaryapi\.dev/i.test(base)) {
-    return `${base}/word-of-the-day`;
+  if (!isPublicBase(base)) {
+    return `${base}/word-of-the-day?lang=${encodeURIComponent(lang)}`;
   }
   return null;
 }
 
 // PUBLIC_INTERFACE
-export async function fetchWotdFromBackend() {
+export async function fetchWotdFromBackend(lang = "en") {
   /**
-   * Tries to fetch WOTD from custom backend if available.
-   * Expected response: { word, meanings:[{partOfSpeech, definition, example}], phonetics:[{text, audio}] }
-   * Returns normalized array [{word, phonetic, phonetics, meanings}] on success, or null if not available/404.
+   * Tries to fetch WOTD from custom backend by language if available.
+   * Returns normalized array or null if not available/404.
    */
-  const url = getWotdBackendUrl();
+  const url = getWotdBackendUrl(lang);
   if (!url) return null;
   try {
     const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -225,8 +226,7 @@ export async function fetchWotdFromBackend() {
       return null;
     }
     const data = await res.json();
-    // Normalize single-object to array using normalizeCustomApi
-    const normalized = normalizeCustomApi(data);
+    const normalized = normalizeCustomApi(data, lang);
     return normalized;
   } catch (_) {
     return null;

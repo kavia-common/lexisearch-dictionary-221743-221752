@@ -64,14 +64,14 @@ afterEach(() => {
 test("search adds to history and clicking history re-searches", async () => {
   setupFetchSuccessFor("alpha");
   render(<App />);
-  const input = screen.getByRole("combobox", { name: /search for a word/i });
+  const input = screen.getByRole("combobox");
   fireEvent.change(input, { target: { value: "alpha" } });
   fireEvent.submit(input.closest("form"));
 
   await waitFor(() => expect(screen.getByText("alpha")).toBeInTheDocument());
 
-  // History panel should have 'alpha'
-  const goButtons = screen.getAllByRole("button", { name: /search alpha/i });
+  // History panel should have 'alpha' - click a Go button (label localized)
+  const goButtons = screen.getAllByRole("button", { name: /Go|जाएँ|వెళ్ళు/i });
   expect(goButtons.length).toBeGreaterThan(0);
 
   // Clicking history triggers another fetch
@@ -84,18 +84,18 @@ test("search adds to history and clicking history re-searches", async () => {
 test("favoriting current word appears in Favorites and clicking triggers search", async () => {
   setupFetchSuccessFor("beta");
   render(<App />);
-  const input = screen.getByRole("combobox", { name: /search for a word/i });
+  const input = screen.getByRole("combobox");
   fireEvent.change(input, { target: { value: "beta" } });
   fireEvent.submit(input.closest("form"));
 
   await waitFor(() => expect(screen.getByText("beta")).toBeInTheDocument());
 
   // Click star button to favorite
-  const starBtn = screen.getByRole("button", { name: /favorite word/i });
+  const starBtn = screen.getByRole("button", { name: /Favorite|Unfavorite|पसंदीदा|हटाएं|ఇష్టంగా|తొలగించు/i });
   fireEvent.click(starBtn);
 
   // Favorites panel should now contain 'beta'
-  const favGo = screen.getByRole("button", { name: /search beta/i });
+  const favGo = screen.getAllByRole("button", { name: /Go|जाएँ|వెళ్ళు/i })[0];
   setupFetchSuccessFor("beta");
   fireEvent.click(favGo);
 

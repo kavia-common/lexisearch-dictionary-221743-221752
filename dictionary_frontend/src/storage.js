@@ -1,7 +1,6 @@
 //
 // Local storage utilities with safety guards and in-memory fallback.
 //
-
 const HISTORY_KEY = "ls_history_v1";
 const FAVORITES_KEY = "ls_favorites_v1";
 
@@ -61,13 +60,24 @@ export function getHistory() {
 }
 
 // PUBLIC_INTERFACE
-export function addToHistory(term) {
-  /** Add/refresh a term in history with current timestamp; keeps max 20 and unique terms. */
-  const t = norm(term);
-  if (!t) return getHistory();
+export function addToHistory(termOrObj) {
+  /**
+   * Add/refresh a term in history; accepts string term or { word, lang } shape.
+   * Stores as { term: "word|lang", ts } for backward compatibility.
+   */
+  let term = "";
+  if (typeof termOrObj === "string") {
+    term = termOrObj;
+  } else if (termOrObj && typeof termOrObj === "object") {
+    const w = termOrObj.word || "";
+    const l = termOrObj.lang || "";
+    term = l ? `${w}|${l}` : w;
+  }
+  const tkey = norm(term);
+  if (!tkey) return getHistory();
   const now = Date.now();
-  const list = getHistory().filter((i) => norm(i.term) !== t);
-  list.unshift({ term: t, ts: now });
+  const list = getHistory().filter((i) => norm(i.term) !== tkey);
+  list.unshift({ term: tkey, ts: now });
   const trimmed = list.slice(0, 20);
   setLs(HISTORY_KEY, trimmed);
   return trimmed;

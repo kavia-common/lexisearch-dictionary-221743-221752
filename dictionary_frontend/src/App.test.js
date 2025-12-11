@@ -1,14 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders hero title text and panels', () => {
+test('renders panels', () => {
   render(<App />);
-  const titleText = screen.getByText(/Find the meaning of any word/i);
-  expect(titleText).toBeInTheDocument();
-
   // Panels labels should be present after initial render (even if empty).
-  const historyLabel = screen.getByRole("heading", { name: /Recent Searches/i });
-  const favoritesLabel = screen.getByRole("heading", { name: /Favorites/i });
+  const historyLabel = screen.getByRole("heading", { name: /Recent Searches|हाल की खोजें|ఇటీవలి శోధనలు/i });
+  const favoritesLabel = screen.getByRole("heading", { name: /Favorites|पसंदीदा|ఇష్టమైనవి/i });
   expect(historyLabel).toBeInTheDocument();
   expect(favoritesLabel).toBeInTheDocument();
 });

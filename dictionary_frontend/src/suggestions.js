@@ -1,10 +1,9 @@
 //
 // Suggestions API client with environment-aware base URL and graceful fallback.
 //
-/**
- * Resolve suggestion endpoint base, prioritizing REACT_APP_API_BASE if present.
- * If not set, we use Datamuse as a public fallback.
- */
+// Resolve suggestion endpoint base, prioritizing REACT_APP_API_BASE if present.
+// If not set, we use Datamuse as a public fallback.
+//
 export function getSuggestionsBase() {
   const raw =
     process.env.REACT_APP_API_BASE ||
@@ -23,37 +22,42 @@ export function getSuggestionsBase() {
 }
 
 // PUBLIC_INTERFACE
-export async function fetchSuggestions(prefix) {
+export async function fetchSuggestions(prefix, lang = "en") {
   /** Fetch auto-suggestions for a given prefix (300ms debounced at caller).
-   * - Uses GET /suggest?q=<prefix> against REACT_APP_API_BASE if set.
-   * - Else falls back to Datamuse: /sug?s=<prefix>.
-   * Returns a normalized array of suggestion strings.
+   * - Uses GET /suggest?q=<prefix>&lang=<code> against REACT_APP_API_BASE if set.
+   * - Else falls back to Datamuse (English only). For non-English without backend, returns [] with limited=true.
+   * Returns { list: string[], limited: boolean } where limited=true indicates disabled/limited suggestions.
    */
   const trimmed = (prefix || "").trim();
-  if (!trimmed) return [];
+  if (!trimmed) return { list: [], limited: false };
 
   const resolved = getSuggestionsBase();
 
   let url = "";
+  let limited = false;
+
   if (resolved.type === "custom") {
-    url = `${resolved.base}/suggest?q=${encodeURIComponent(trimmed)}`;
+    url = `${resolved.base}/suggest?q=${encodeURIComponent(trimmed)}&lang=${encodeURIComponent(
+      lang
+    )}`;
   } else {
+    // Datamuse: English only
+    if (lang !== "en") {
+      // Disable suggestions gracefully for non-English without backend
+      return { list: [], limited: true };
+    }
     url = `${resolved.base}/sug?s=${encodeURIComponent(trimmed)}`;
   }
 
   try {
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) {
-      // Surface no suggestions on error, do not throw to avoid crashes
-      return [];
+      return { list: [], limited };
     }
     const data = await res.json();
 
-    // Normalize various shapes. Expected:
-    // - Custom: [{ term: "word" }, ...] or ["word", ...]
-    // - Datamuse: [{ word: "word", score: N }, ...]
     if (Array.isArray(data)) {
-      return data
+      const list = data
         .map((item) => {
           if (typeof item === "string") return item;
           if (item && typeof item.term === "string") return item.term;
@@ -61,10 +65,10 @@ export async function fetchSuggestions(prefix) {
           return "";
         })
         .filter(Boolean);
+      return { list, limited };
     }
-    // If object or unknown shape, return empty for safety
-    return [];
+    return { list: [], limited };
   } catch (_) {
-    return [];
+    return { list: [], limited };
   }
 }

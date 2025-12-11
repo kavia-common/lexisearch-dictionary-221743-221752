@@ -65,20 +65,16 @@ afterEach(() => {
 });
 
 test("WOTD caches per day and reuses cache without refresh", async () => {
-  // First render: we expect a curated selection which then triggers define fetch.
-  setupDefinitionFetch("serendipity"); // the exact word is deterministic but unknown here, we allow any fetch
+  setupDefinitionFetch("serendipity");
   render(<App />);
 
-  // Wait for WOTD section present
   await waitFor(() => {
     expect(screen.getByRole("region", { name: /Word of the Day card/i })).toBeInTheDocument();
   });
 
-  // After first fetch, a cache should be stored
   const lsGet = window.localStorage.getItem("ls_wotd_v1");
   expect(lsGet).not.toBeNull();
 
-  // Render again with same mocks; ensure it uses cache (fetch may still be called but WOTD shows quickly)
   jest.clearAllMocks();
   render(<App />);
   await waitFor(() => {
@@ -93,8 +89,7 @@ test("WOTD refresh bypasses cache and triggers new fetch", async () => {
     expect(screen.getByRole("region", { name: /Word of the Day card/i })).toBeInTheDocument();
   });
 
-  const refreshBtn = screen.getByRole("button", { name: /Refresh word of the day/i });
-  // Before clicking, record fetch calls
+  const refreshBtn = screen.getByRole("button", { name: /Refresh/i });
   const callsBefore = global.fetch.mock.calls.length;
 
   fireEvent.click(refreshBtn);
@@ -111,16 +106,14 @@ test('"Use this word" triggers a search and shows result header', async () => {
     expect(screen.getByRole("region", { name: /Word of the Day card/i })).toBeInTheDocument();
   });
 
-  const useBtn = screen.getByRole("button", { name: /Use this word/i });
+  const useBtn = screen.getByRole("button", { name: /Use this word|इस शब्द का उपयोग करें|ఈ పదాన్ని వాడండి/i });
   fireEvent.click(useBtn);
 
-  // A result section should appear eventually; we don't know the exact word,
-  // but we can assert presence of results region by role label containing "Results for"
   await waitFor(() => {
-    const region = screen.getAllByRole("region").find((el) =>
-      el.getAttribute("aria-label")?.startsWith("Results for")
-    );
+    const region = screen.getAllByRole("region").find((el) => {
+      const label = el.getAttribute("aria-label") || "";
+      return label.toLowerCase().includes("results") || label.startsWith("Results for");
+    });
     expect(region).toBeTruthy();
   });
-}
-) 
+});

@@ -20,15 +20,24 @@ import {
   timeAgo,
   toggleFavorite,
 } from "./storage";
+import { getDefaultLang, setStoredLang, SUPPORTED_LANGS, t } from "./i18n";
 
 // Helpers for safe access
 const safeArray = (val) => (Array.isArray(val) ? val : []);
 const safeString = (val) => (typeof val === "string" ? val : "");
 
 // PUBLIC_INTERFACE
-function Navbar() {
-  /** Minimal top navbar with Ocean Professional styling. */
+function Navbar({ lang, onLangChange }) {
+  /** Minimal top navbar with Ocean Professional styling and language switcher. */
   const base = getApiBaseUrl();
+  const liveRef = useRef(null);
+
+  useEffect(() => {
+    if (liveRef.current) {
+      liveRef.current.textContent = `Language set to ${lang}`;
+    }
+  }, [lang]);
+
   return (
     <nav className="navbar">
       <div className="navbar__inner">
@@ -36,12 +45,34 @@ function Navbar() {
           <span className="brand__logo" aria-hidden="true">
             🔎
           </span>
-          <span className="brand__name">LexiSearch</span>
+          <span className="brand__name">{t(lang, "app_name")}</span>
         </div>
-        <div className="navbar__meta">
+        <div className="navbar__meta" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <label htmlFor="lang-select" className="navbar__env" aria-label="Select language">
+            🌐
+          </label>
+          <select
+            id="lang-select"
+            aria-label="Select language"
+            onChange={(e) => onLangChange(e.target.value)}
+            value={lang}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border)",
+              background: "#fff",
+            }}
+          >
+            {SUPPORTED_LANGS.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
           <span className="navbar__env" title="API Base URL in use">
-            API: {safeString(base)}
+            {t(lang, "api_label")}: {safeString(base)}
           </span>
+          <span aria-live="polite" aria-atomic="true" style={{ position: "absolute", left: -9999 }} ref={liveRef} />
         </div>
       </div>
     </nav>
@@ -49,7 +80,7 @@ function Navbar() {
 }
 
 // PUBLIC_INTERFACE
-function SearchBar({ onSubmit, defaultValue = "" }) {
+function SearchBar({ lang, onSubmit, defaultValue = "" }) {
   /**
    * Central search input with:
    * - Enter or button submit
@@ -59,6 +90,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
   const [value, setValue] = useState(defaultValue);
   const [listening, setListening] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsLimited, setSuggestionsLimited] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingSug, setLoadingSug] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -94,15 +126,17 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
       setSuggestions([]);
       setShowSuggestions(false);
       setLoadingSug(false);
+      setSuggestionsLimited(false);
       return;
     }
 
     setLoadingSug(true);
     debounceRef.current = setTimeout(async () => {
       const currentId = ++controllerRef.current;
-      const data = await fetchSuggestions(q);
+      const { list, limited } = await fetchSuggestions(q, lang);
       if (currentId === controllerRef.current) {
-        setSuggestions(data);
+        setSuggestions(list);
+        setSuggestionsLimited(!!limited);
         setShowSuggestions(true);
         setLoadingSug(false);
       }
@@ -111,38 +145,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [value]);
-
-  // Keyboard navigation for suggestions
-  const onKeyDown = (e) => {
-    if (!showSuggestions) return;
-
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveIndex((idx) => {
-        const next = idx + 1;
-        return next >= suggestions.length ? suggestions.length - 1 : next;
-      });
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIndex((idx) => {
-        const next = idx - 1;
-        return next < 0 ? -1 : next;
-      });
-    } else if (e.key === "Enter") {
-      if (activeIndex >= 0 && activeIndex < suggestions.length) {
-        e.preventDefault();
-        const chosen = suggestions[activeIndex];
-        setValue(chosen);
-        setShowSuggestions(false);
-        setActiveIndex(-1);
-        onSubmit(chosen);
-      }
-    } else if (e.key === "Escape") {
-      setShowSuggestions(false);
-      setActiveIndex(-1);
-    }
-  };
+  }, [value, lang]);
 
   // Voice input using Web Speech API
   const isSpeechSupported =
@@ -151,14 +154,16 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
 
   const startListening = () => {
     if (!isSpeechSupported) {
-      alert("Speech recognition is not supported in this browser.");
+      alert(t(lang, "speech_unsupported"));
       return;
     }
 
     const SR =
       window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SR();
-    recognition.lang = "en-US";
+    // Best effort: map app language to SR locale
+    const locales = { en: "en-US", hi: "hi-IN", te: "te-IN" };
+    recognition.lang = locales[lang] || "en-US";
     recognition.interimResults = true;
     recognition.continuous = false;
 
@@ -179,10 +184,10 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
       }
 
       if (finalTranscript) {
-        const t = finalTranscript.trim();
-        setValue(t);
-        if (t.length > 0) {
-          onSubmit(t);
+        const tVal = finalTranscript.trim();
+        setValue(tVal);
+        if (tVal.length > 0) {
+          onSubmit(tVal);
           setShowSuggestions(false);
         }
       } else if (interim) {
@@ -207,7 +212,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
 
   const toggleMic = () => {
     if (!isSpeechSupported) {
-      alert("Speech recognition is not supported in this browser.");
+      alert(t(lang, "speech_unsupported"));
       return;
     }
     if (listening) stopListening();
@@ -225,13 +230,40 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
 
   return (
     <form className="search" onSubmit={handleSubmit} role="search">
-      <div className="search__inner" onKeyDown={onKeyDown}>
+      <div className="search__inner" onKeyDown={(e) => {
+        if (!showSuggestions) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setActiveIndex((idx) => {
+            const next = idx + 1;
+            return next >= suggestions.length ? suggestions.length - 1 : next;
+          });
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setActiveIndex((idx) => {
+            const next = idx - 1;
+            return next < 0 ? -1 : next;
+          });
+        } else if (e.key === "Enter") {
+          if (activeIndex >= 0 && activeIndex < suggestions.length) {
+            e.preventDefault();
+            const chosen = suggestions[activeIndex];
+            setValue(chosen);
+            setShowSuggestions(false);
+            setActiveIndex(-1);
+            onSubmit(chosen);
+          }
+        } else if (e.key === "Escape") {
+          setShowSuggestions(false);
+          setActiveIndex(-1);
+        }
+      }}>
         <input
           ref={inputRef}
-          aria-label="Search for a word"
+          aria-label={t(lang, "search_aria")}
           className="search__input"
           type="text"
-          placeholder="Search any word (e.g., eloquent)…"
+          placeholder={t(lang, "search_placeholder")}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           autoFocus
@@ -249,8 +281,8 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
             className={`btn btn--icon btn--muted ${listening ? "mic-on" : ""}`}
             onClick={toggleMic}
             aria-pressed={listening}
-            aria-label={listening ? "Stop voice input" : "Start voice input"}
-            title={listening ? "Stop voice input" : "Start voice input"}
+            aria-label={listening ? t(lang, "voice_stop") : t(lang, "voice_start")}
+            title={listening ? t(lang, "voice_stop") : t(lang, "voice_start")}
           >
             {listening ? "🎤" : "🎙️"}
           </button>
@@ -260,28 +292,31 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
             className="btn btn--icon btn--muted"
             disabled
             aria-disabled="true"
-            title="Speech recognition not supported"
+            title={t(lang, "speech_unsupported")}
           >
             🎙️
           </button>
         )}
-        <button className="btn btn--primary" type="submit" aria-label="Search">
-          Search
+        <button className="btn btn--primary" type="submit" aria-label={t(lang, "search_btn")}>
+          {t(lang, "search_btn")}
         </button>
 
         {showSuggestions && (
-          <div className="suggestions" role="region" aria-label="Suggestions">
+          <div className="suggestions" role="region" aria-label={t(lang, "suggestions")}>
             <div className="suggestions__header">
-              <span>Suggestions</span>
+              <span>{t(lang, "suggestions")}</span>
               <span aria-hidden="true">•</span>
               <span>
                 Use <kbd>↑</kbd> <kbd>↓</kbd> to navigate, <kbd>Enter</kbd> to select
               </span>
             </div>
             {loadingSug ? (
-              <div className="suggestions__status">Loading suggestions…</div>
+              <div className="suggestions__status">{t(lang, "suggestions_loading")}</div>
             ) : suggestions.length === 0 ? (
-              <div className="suggestions__status">No matches</div>
+              <div className="suggestions__status">
+                {t(lang, "suggestions_none")}
+                {suggestionsLimited ? ` — ${t(lang, "suggestions_disabled_non_en")}` : ""}
+              </div>
             ) : (
               <ul
                 id={listId}
@@ -311,8 +346,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
         )}
       </div>
       <p className="search__hint">
-        Tip: Try words like “serendipity”, “benevolent”, or “ocean”. Press{" "}
-        <kbd>Enter</kbd> to search.
+        {t(lang, "tip")}
       </p>
     </form>
   );
@@ -328,7 +362,7 @@ function AudioButton({ url, label = "Play pronunciation" }) {
   );
 }
 
-function MeaningCard({ meaning, onChipClick }) {
+function MeaningCard({ lang, meaning, onChipClick }) {
   const partOfSpeech = safeString(meaning.partOfSpeech);
   const definitions = safeArray(meaning.definitions);
   const synonyms = safeArray(meaning.synonyms);
@@ -341,7 +375,7 @@ function MeaningCard({ meaning, onChipClick }) {
       </div>
       <div className="card__body">
         {definitions.length === 0 ? (
-          <p className="empty">No definitions available.</p>
+          <p className="empty">{t(lang, "no_definitions")}</p>
         ) : (
           <ol className="definitions">
             {definitions.map((d, idx) => (
@@ -358,7 +392,7 @@ function MeaningCard({ meaning, onChipClick }) {
         <div className="chips">
           {synonyms.length > 0 && (
             <div className="chips__group">
-              <span className="chips__label">Synonyms</span>
+              <span className="chips__label">{t(lang, "synonyms")}</span>
               <div className="chips__wrap" role="list">
                 {synonyms.map((s, i) => (
                   <button
@@ -377,7 +411,7 @@ function MeaningCard({ meaning, onChipClick }) {
           )}
           {antonyms.length > 0 && (
             <div className="chips__group">
-              <span className="chips__label">Antonyms</span>
+              <span className="chips__label">{t(lang, "antonyms")}</span>
               <div className="chips__wrap" role="list">
                 {antonyms.map((a, i) => (
                   <button
@@ -400,7 +434,7 @@ function MeaningCard({ meaning, onChipClick }) {
   );
 }
 
-function Result({ item, onChipClick }) {
+function Result({ lang, item, onChipClick }) {
   const word = safeString(item.word);
   const phonetic = safeString(item.phonetic);
   const phonetics = safeArray(item.phonetics);
@@ -413,24 +447,23 @@ function Result({ item, onChipClick }) {
   }, [phonetics]);
 
   return (
-    <section className="result" role="region" aria-label={`Results for ${word}`}>
+    <section className="result" role="region" aria-label={`${t(lang, "results_for")} ${word}`}>
       <header className="result__header">
         <div className="result__word">
           <h2 className="word">{word}</h2>
           {phonetic && <span className="phonetic">/{phonetic}/</span>}
         </div>
         <div className="result__meta">
-          <AudioButton url={audioUrl} />
-          {/* Favorite star is injected by parent via CSS sibling; placeholder for alignment */}
+          <AudioButton url={audioUrl} label={t(lang, "play_pron")} />
         </div>
       </header>
 
       <div className="result__content">
         {meanings.length === 0 ? (
-          <div className="empty">No meanings found.</div>
+          <div className="empty">{t(lang, "meanings_not_found")}</div>
         ) : (
           meanings.map((m, idx) => (
-            <MeaningCard key={idx} meaning={m} onChipClick={onChipClick} />
+            <MeaningCard key={idx} lang={lang} meaning={m} onChipClick={onChipClick} />
           ))
         )}
       </div>
@@ -438,15 +471,16 @@ function Result({ item, onChipClick }) {
   );
 }
 
- // PUBLIC_INTERFACE
+// PUBLIC_INTERFACE
 function App() {
   /**
    * Main App with single-page layout:
-   * - Top navbar
+   * - Top navbar with language switcher
    * - Central search
    * - Results below as cards
    * Includes loading, error, and empty states.
    */
+  const [lang, setLang] = useState(() => getDefaultLang());
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]); // normalized entries
   const [loading, setLoading] = useState(false);
@@ -456,9 +490,10 @@ function App() {
   const [panelsOpen, setPanelsOpen] = useState({ history: true, favorites: true });
 
   // WOTD State
-  const [wotd, setWotd] = useState(null); // normalized single entry {word, phonetic, phonetics, meanings}
+  const [wotd, setWotd] = useState(null); // normalized single entry
   const [wotdLoading, setWotdLoading] = useState(true);
   const [wotdError, setWotdError] = useState("");
+  const [wotdNotice, setWotdNotice] = useState("");
 
   // Apply subtle page theme background via body class
   useEffect(() => {
@@ -466,12 +501,10 @@ function App() {
     return () => document.body.classList.remove("ocean-bg");
   }, []);
 
-  // Ensure chips update history too
+  // Persist lang changes
   useEffect(() => {
-    if (results && results.length > 0 && query) {
-      // We already updated history on successful search in handleSearch
-    }
-  }, [results, query]);
+    setStoredLang(lang);
+  }, [lang]);
 
   const todayStr = useMemo(() => {
     const d = new Date();
@@ -481,7 +514,7 @@ function App() {
     return `${y}-${m}-${day}`;
   }, []);
 
-  // Safe localStorage helpers for WOTD
+  // Safe localStorage helpers for WOTD, cache per-day and per-language
   const lsKey = "ls_wotd_v1";
   const readWotdCache = useCallback(() => {
     try {
@@ -489,18 +522,18 @@ function App() {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object") return null;
-      if (parsed.date !== todayStr) return null;
+      if (parsed.date !== `${todayStr}:${lang}`) return null;
       return parsed.payload || null;
     } catch (_) {
       return null;
     }
-  }, [todayStr]);
+  }, [todayStr, lang]);
 
-  const writeWotdCache = useCallback((payload, dateStr) => {
+  const writeWotdCache = useCallback((payload, dateStr, langCode) => {
     try {
       window.localStorage.setItem(
         lsKey,
-        JSON.stringify({ date: dateStr, payload })
+        JSON.stringify({ date: `${dateStr}:${langCode}`, payload })
       );
     } catch (_) {
       // ignore
@@ -517,12 +550,13 @@ function App() {
   async function loadWotd({ forceRefresh = false } = {}) {
     /**
      * Load WOTD:
-     * 1) Use cache if present for today and not forcing refresh.
-     * 2) Try backend GET /word-of-the-day if custom base configured.
-     * 3) Fallback: deterministically pick curated word and fetch its definitions.
+     * 1) Use cache if present for today+lang and not forcing refresh.
+     * 2) Try backend GET /word-of-the-day?lang=<code> if custom base configured.
+     * 3) Fallback: for non-English show English WOTD with notice.
      */
     setWotdLoading(true);
     setWotdError("");
+    setWotdNotice("");
     try {
       if (!forceRefresh) {
         const cached = readWotdCache();
@@ -534,23 +568,29 @@ function App() {
       }
 
       // Try backend first
-      const fromBackend = await fetchWotdFromBackend();
+      const fromBackend = await fetchWotdFromBackend(lang);
       if (fromBackend && fromBackend.length > 0 && fromBackend[0]?.word) {
         setWotd(fromBackend[0]);
-        writeWotdCache(fromBackend, todayStr);
+        writeWotdCache(fromBackend, todayStr, lang);
         setWotdLoading(false);
         return;
       }
 
-      // Fallback: curated deterministic selection
+      // Fallback:
+      // If non-English, fallback to English daily logic with notice
+      let targetLang = lang;
+      if (lang !== "en") {
+        setWotdNotice(t(lang, "wotd_fallback_notice"));
+        targetLang = "en";
+      }
       const term = pickCuratedWord();
-      const defs = await fetchDefinitions(term);
+      const defs = await fetchDefinitions(term, targetLang);
       if (Array.isArray(defs) && defs.length > 0) {
         setWotd(defs[0]);
-        writeWotdCache(defs, todayStr);
+        writeWotdCache(defs, todayStr, lang);
       } else {
         setWotd(null);
-        writeWotdCache([], todayStr);
+        writeWotdCache([], todayStr, lang);
       }
     } catch (e) {
       setWotdError(e?.message || "Unable to load Word of the Day.");
@@ -562,7 +602,7 @@ function App() {
   useEffect(() => {
     loadWotd({ forceRefresh: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayStr]);
+  }, [todayStr, lang]);
 
   const handleSearch = async (word) => {
     setQuery(word);
@@ -570,14 +610,16 @@ function App() {
     setError("");
     setResults([]);
     try {
-      const data = await fetchDefinitions(word);
-      // fetchDefinitions now always returns normalized array on success
+      const data = await fetchDefinitions(word, lang);
       if (Array.isArray(data) && data.length > 0) {
         setResults(data);
-        // Update history with normalized word key
-        setHistory(addToHistory(word));
+        // Update history with language
+        const h = addToHistory(`${word}|${lang}`); // temporary call; will normalize below
+        // We'll instead store as { word, lang, ts } by patching storage below in rendering
+        // but for backward compat we still call addToHistory; UI rendering uses custom view mapping
+        setHistory(h);
       } else {
-        setError("No results found.");
+        setError(t(lang, "no_results_yet"));
       }
     } catch (e) {
       setError(e?.message || "Unable to fetch definitions.");
@@ -586,37 +628,37 @@ function App() {
     }
   };
 
-  const handleChipClick = (w) => {
-    if (typeof w === "string" && w.trim().length > 0) {
-      // handleSearch will add to history on success
-      handleSearch(w.trim());
-    }
-  };
-
+  // Render
   return (
     <div className="app">
-      <Navbar />
+      <Navbar
+        lang={lang}
+        onLangChange={(code) => {
+          setLang(code);
+        }}
+      />
       <main className="container">
         <section className="hero">
-          <h1 className="title">Find the meaning of any word</h1>
+          <h1 className="title">{t(lang, "app_name")}: {t(lang, "start_prompt")}</h1>
           <p className="subtitle">
-            Definitions, pronunciation, synonyms and antonyms – all in one place.
+            {/* Keep subtitle concise, localized via two keys */}
+            {t(lang, "start_prompt")}
           </p>
-          <SearchBar onSubmit={handleSearch} />
+          <SearchBar lang={lang} onSubmit={handleSearch} />
         </section>
 
         {/* Word of the Day */}
-        <section className="wotd" aria-label="Word of the Day">
+        <section className="wotd" aria-label={t(lang, "wotd")}>
           <div className="wotd__card" role="region" aria-label="Word of the Day card">
             <div className="wotd__header">
               <div className="wotd__title" role="heading" aria-level={2}>
-                🌅 <span>Word of the Day</span>
+                🌅 <span>{t(lang, "wotd")}</span>
               </div>
               <div className="wotd__actions">
                 <button
                   className="icon-btn"
-                  aria-label="Refresh word of the day"
-                  title="Refresh"
+                  aria-label={t(lang, "wotd_refresh")}
+                  title={t(lang, "wotd_refresh")}
                   onClick={() => loadWotd({ forceRefresh: true })}
                 >
                   ⟳
@@ -624,17 +666,20 @@ function App() {
               </div>
             </div>
             <div className="wotd__body">
+              {wotdNotice ? (
+                <div className="status status--hint" role="note">{wotdNotice}</div>
+              ) : null}
               {wotdLoading ? (
                 <div className="status status--loading" role="status" aria-busy="true">
                   <span className="spinner" aria-hidden="true" />
-                  <span>Fetching today’s word…</span>
+                  <span>{t(lang, "fetching")}</span>
                 </div>
               ) : wotdError ? (
                 <div className="status status--error" role="alert">
                   {wotdError}
                 </div>
               ) : !wotd ? (
-                <div className="empty">No word available. Try refresh.</div>
+                <div className="empty">{t(lang, "no_word")}</div>
               ) : (
                 <>
                   <div className="wotd__word">
@@ -649,13 +694,13 @@ function App() {
                         const p = (Array.isArray(wotd.phonetics) ? wotd.phonetics : []).find(
                           (p) => p.audio
                         );
-                        return p ? <AudioButton url={p.audio} label="Play WOTD pronunciation" /> : null;
+                        return p ? <AudioButton url={p.audio} label={t(lang, "play_pron_wotd")} /> : null;
                       })()}
                       <button
                         className="star-btn"
-                        aria-label={isFavorite(wotd.word) ? "Unfavorite word" : "Favorite word"}
+                        aria-label={isFavorite(wotd.word) ? t(lang, "unfavorite") + " word" : t(lang, "favorite") + " word"}
                         aria-pressed={isFavorite(wotd.word)}
-                        title={isFavorite(wotd.word) ? "Unfavorite" : "Add to favorites"}
+                        title={isFavorite(wotd.word) ? t(lang, "unfavorite") : t(lang, "favorite")}
                         onClick={() => {
                           const res = toggleFavorite(wotd.word);
                           setFavorites(res.list);
@@ -668,7 +713,7 @@ function App() {
 
                   {/* Show first meaning/definition */}
                   {Array.isArray(wotd.meanings) && wotd.meanings.length > 0 ? (
-                    <div className="card" role="article" aria-label="Primary meaning">
+                    <div className="card" role="article" aria-label={t(lang, "primary_meaning")}>
                       <div className="card__header">
                         <span className="pos">
                           {wotd.meanings[0]?.partOfSpeech || "—"}
@@ -692,24 +737,24 @@ function App() {
                             </>
                           ) : (
                             <li className="definition">
-                              <div className="definition__text">No definition available.</div>
+                              <div className="definition__text">{t(lang, "no_definitions")}</div>
                             </li>
                           )}
                         </ol>
                       </div>
                     </div>
                   ) : (
-                    <div className="empty">No meanings found.</div>
+                    <div className="empty">{t(lang, "meanings_not_found")}</div>
                   )}
 
                   <div className="wotd__buttons">
                     <button
                       className="btn btn--amber btn--small"
-                      aria-label={`Use this word ${wotd.word}`}
+                      aria-label={`${t(lang, "use_this_word")} ${wotd.word}`}
                       onClick={() => handleSearch(wotd.word)}
-                      title="Use this word"
+                      title={t(lang, "use_this_word")}
                     >
-                      Use this word
+                      {t(lang, "use_this_word")}
                     </button>
                   </div>
                 </>
@@ -722,7 +767,7 @@ function App() {
           {loading && (
             <div className="status status--loading" role="status" aria-busy="true">
               <span className="spinner" aria-hidden="true" />
-              <span>Searching the depths…</span>
+              <span>{t(lang, "loading")}</span>
             </div>
           )}
           {!loading && error && (
@@ -732,12 +777,12 @@ function App() {
           )}
           {!loading && !error && results.length === 0 && query.length === 0 && (
             <div className="status status--hint" role="note">
-              Start by typing a word above to see results.
+              {t(lang, "start_prompt")}
             </div>
           )}
           {!loading && !error && results.length === 0 && query.length > 0 && (
             <div className="status status--hint" role="note">
-              No results yet. Try a different word.
+              {t(lang, "no_results_yet")}
             </div>
           )}
         </section>
@@ -750,13 +795,13 @@ function App() {
                 const fav = isFavorite(w);
                 return (
                   <div key={idx} style={{ position: "relative" }}>
-                    <Result item={r} onChipClick={handleChipClick} />
+                    <Result lang={lang} item={r} onChipClick={(v) => handleSearch(v)} />
                     <div style={{ position: "absolute", top: 14, right: 18 }}>
                       <button
                         className="star-btn"
-                        aria-label={fav ? "Unfavorite word" : "Favorite word"}
+                        aria-label={fav ? t(lang, "unfavorite") + " word" : t(lang, "favorite") + " word"}
                         aria-pressed={fav}
-                        title={fav ? "Unfavorite" : "Add to favorites"}
+                        title={fav ? t(lang, "unfavorite") : t(lang, "favorite")}
                         onClick={() => {
                           const res = toggleFavorite(w);
                           setFavorites(res.list);
@@ -772,10 +817,10 @@ function App() {
 
             <section className="panels" aria-label="History and Favorites">
               {/* History Panel */}
-              <aside className="panel" aria-label="Recent Searches">
+              <aside className="panel" aria-label={t(lang, "recent_searches")}>
                 <div className="panel__header">
                   <div className="panel__title" role="heading" aria-level={2}>
-                    🕘 <span>Recent Searches</span>
+                    🕘 <span>{t(lang, "recent_searches")}</span>
                   </div>
                   <div className="panel__actions">
                     <button
@@ -783,46 +828,63 @@ function App() {
                       onClick={() =>
                         setPanelsOpen((p) => ({ ...p, history: !p.history }))
                       }
-                      aria-label={panelsOpen.history ? "Collapse history" : "Expand history"}
+                      aria-label={
+                        panelsOpen.history ? `${t(lang, "collapse")} history` : `${t(lang, "expand")} history`
+                      }
                     >
                       {panelsOpen.history ? "▾" : "▸"}
                     </button>
                     <button
                       className="icon-btn"
                       onClick={() => setHistory(clearHistory())}
-                      aria-label="Clear all history"
+                      aria-label={t(lang, "clear_all")}
                     >
-                      Clear All
+                      {t(lang, "clear_all")}
                     </button>
                   </div>
                 </div>
                 {panelsOpen.history && (
                   <div className="panel__body">
                     {history.length === 0 ? (
-                      <div className="empty">No recent searches.</div>
+                      <div className="empty">{t(lang, "no_recent")}</div>
                     ) : (
                       <ul className="list" role="list">
-                        {history.map((h, i) => (
-                          <li key={`h-${i}`} className="list__item">
-                            <button
-                              className="list__action"
-                              aria-label={`Search ${h.term}`}
-                              onClick={() => handleSearch(h.term)}
-                            >
-                              Go
-                            </button>
-                            <span className="list__term">{h.term}</span>
-                            <span className="list__meta">{timeAgo(h.ts)}</span>
-                            <button
-                              className="list__action"
-                              aria-label={`Remove ${h.term} from history`}
-                              onClick={() => setHistory(removeFromHistory(h.term))}
-                              title="Remove"
-                            >
-                              ✕
-                            </button>
-                          </li>
-                        ))}
+                        {history.map((h, i) => {
+                          // Backward compatibility: if term contains |lang, split; else assume current lang
+                          let term = h.term;
+                          let hLang = lang;
+                          if (typeof term === "string" && term.includes("|")) {
+                            const [w, l] = term.split("|");
+                            term = w;
+                            hLang = l || lang;
+                          }
+                          return (
+                            <li key={`h-${i}`} className="list__item">
+                              <button
+                                className="list__action"
+                                aria-label={`Search ${term}`}
+                                onClick={() => {
+                                  // re-run with stored language
+                                  setLang(hLang);
+                                  // ensure persistence before search
+                                  setTimeout(() => handleSearch(term), 0);
+                                }}
+                              >
+                                {t(lang, "go")}
+                              </button>
+                              <span className="list__term">{term}</span>
+                              <span className="list__meta">{timeAgo(h.ts)}</span>
+                              <button
+                                className="list__action"
+                                aria-label={`${t(lang, "remove")} ${term} from history`}
+                                onClick={() => setHistory(removeFromHistory(h.term))}
+                                title={t(lang, "remove")}
+                              >
+                                ✕
+                              </button>
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                   </div>
@@ -830,10 +892,10 @@ function App() {
               </aside>
 
               {/* Favorites Panel */}
-              <aside className="panel" aria-label="Favorite Words">
+              <aside className="panel" aria-label={t(lang, "favorites")}>
                 <div className="panel__header">
                   <div className="panel__title" role="heading" aria-level={2}>
-                    ⭐ <span>Favorites</span>
+                    ⭐ <span>{t(lang, "favorites")}</span>
                   </div>
                   <div className="panel__actions">
                     <button
@@ -841,23 +903,23 @@ function App() {
                       onClick={() =>
                         setPanelsOpen((p) => ({ ...p, favorites: !p.favorites }))
                       }
-                      aria-label={panelsOpen.favorites ? "Collapse favorites" : "Expand favorites"}
+                      aria-label={panelsOpen.favorites ? `${t(lang, "collapse")} favorites` : `${t(lang, "expand")} favorites`}
                     >
                       {panelsOpen.favorites ? "▾" : "▸"}
                     </button>
                     <button
                       className="icon-btn"
                       onClick={() => setFavorites(clearFavorites())}
-                      aria-label="Clear all favorites"
+                      aria-label={t(lang, "clear_all")}
                     >
-                      Clear All
+                      {t(lang, "clear_all")}
                     </button>
                   </div>
                 </div>
                 {panelsOpen.favorites && (
                   <div className="panel__body">
                     {favorites.length === 0 ? (
-                      <div className="empty">No favorites yet.</div>
+                      <div className="empty">{t(lang, "no_favorites")}</div>
                     ) : (
                       <ul className="list" role="list">
                         {favorites.map((w, i) => (
@@ -867,14 +929,14 @@ function App() {
                               aria-label={`Search ${w}`}
                               onClick={() => handleSearch(w)}
                             >
-                              Go
+                              {t(lang, "go")}
                             </button>
                             <span className="list__term">{w}</span>
                             <button
                               className="list__action"
-                              aria-label={`Remove ${w} from favorites`}
+                              aria-label={`${t(lang, "remove")} ${w} from favorites`}
                               onClick={() => setFavorites(removeFavorite(w))}
-                              title="Remove"
+                              title={t(lang, "remove")}
                             >
                               ✕
                             </button>
