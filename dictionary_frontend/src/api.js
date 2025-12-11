@@ -1,6 +1,8 @@
-//
-// API client for dictionary lookups with environment-aware base URL.
-//
+/**
+ * API client for dictionary lookups with environment-aware base URL and normalization.
+ * Provides one normalized response shape to avoid UI crashes across backends.
+ */
+
 // PUBLIC_INTERFACE
 export function getApiBaseUrl() {
   /**
@@ -12,56 +14,171 @@ export function getApiBaseUrl() {
     process.env.REACT_APP_BACKEND_URL ||
     process.env.REACT_APP_FRONTEND_URL;
 
-  // Ensure no trailing slash to avoid double slashes when joining paths
   const cleaned =
     typeof envUrl === "string" && envUrl.trim().length > 0
       ? envUrl.replace(/\/+$/, "")
       : null;
 
-  // Default to the public free dictionary API if no env is provided
   return cleaned || "https://api.dictionaryapi.dev";
+}
+
+/**
+ * Normalize arbitrary values safely.
+ */
+const safeArray = (v) => (Array.isArray(v) ? v : []);
+const safeString = (v) => (typeof v === "string" ? v : "");
+
+/**
+ * Normalize the public dictionaryapi.dev payload into our internal shape.
+ * Input can be array of entries; we map each to:
+ * {
+ *   word, phonetic, phonetics: [{text, audio}],
+ *   meanings: [{ partOfSpeech, definitions: [{definition, example}], synonyms[], antonyms[] }]
+ * }
+ */
+function normalizePublicApi(data) {
+  const entries = Array.isArray(data) ? data : [];
+  return entries.map((e) => {
+    const word = safeString(e?.word);
+    const phonetic = safeString(e?.phonetic);
+    const phonetics = safeArray(e?.phonetics).map((p) => ({
+      text: safeString(p?.text),
+      audio: safeString(p?.audio),
+    }));
+    const meanings = safeArray(e?.meanings).map((m) => ({
+      partOfSpeech: safeString(m?.partOfSpeech),
+      definitions: safeArray(m?.definitions).map((d) => ({
+        definition: safeString(d?.definition),
+        example: safeString(d?.example),
+      })),
+      synonyms: safeArray(m?.synonyms).filter(Boolean),
+      antonyms: safeArray(m?.antonyms).filter(Boolean),
+    }));
+    return { word, phonetic, phonetics, meanings };
+  });
+}
+
+/**
+ * Normalize custom backend (/define?word=<w>) response into the same internal shape.
+ * Expect flexible structures; we attempt to coerce fields where possible.
+ * Supported input examples:
+ * { word, phonetic?, phonetics?:[{text?, audio?}], meanings:[{ partOfSpeech, definitions:[{definition, example?}], synonyms?, antonyms? }] }
+ * or a list of entries with the above shape.
+ */
+function normalizeCustomApi(data) {
+  // Some backends may return a single object or {result: [...]} wrapper
+  const rawEntries = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.result)
+    ? data.result
+    : data
+    ? [data]
+    : [];
+
+  return rawEntries.map((e) => {
+    const word = safeString(e?.word);
+    const phonetic = safeString(e?.phonetic);
+    const phonetics = safeArray(e?.phonetics).map((p) => ({
+      text: safeString(p?.text),
+      audio: safeString(p?.audio),
+    }));
+    const meanings = safeArray(e?.meanings).map((m) => {
+      const defs = safeArray(m?.definitions).map((d) => ({
+        definition:
+          safeString(d?.definition) ||
+          safeString(d?.text) ||
+          safeString(d?.meaning),
+        example: safeString(d?.example),
+      }));
+      return {
+        partOfSpeech: safeString(m?.partOfSpeech || m?.pos),
+        definitions: defs,
+        synonyms: safeArray(m?.synonyms).filter(Boolean),
+        antonyms: safeArray(m?.antonyms).filter(Boolean),
+      };
+    });
+    return { word, phonetic, phonetics, meanings };
+  });
 }
 
 // PUBLIC_INTERFACE
 export async function fetchDefinitions(word) {
   /**
-   * Fetch word definitions, phonetics, meanings, synonyms, antonyms.
-   * Uses:
-   * - REACT_APP_API_BASE (preferred)
-   * - falls back to public API when not provided.
+   * Fetch word data and return a normalized array of entries.
+   * Strategy:
+   * 1) If REACT_APP_API_BASE is set and not the public API, call GET /define?word=<w>
+   * 2) Else, call public API: https://api.dictionaryapi.dev/api/v2/entries/en/<word>
+   * Always normalize to a single internal shape so UI never crashes on missing fields.
    */
   const base = getApiBaseUrl();
+  const isPublic = /dictionaryapi\.dev/i.test(base);
 
-  // If the base looks like the public api, use its canonical path schema.
-  // Public API endpoint: https://api.dictionaryapi.dev/api/v2/entries/en/<word>
   let url = "";
-  if (/dictionaryapi\.dev/i.test(base)) {
-    url = `${base}/api/v2/entries/en/${encodeURIComponent(word)}`;
+  if (!isPublic && base) {
+    // Prefer custom backend if provided
+    url = `${base}/define?word=${encodeURIComponent(word)}`;
   } else {
-    // For custom backends, assume a sane REST path like /api/v1/entries/en/<word>
-    // This is a best effort; if backend differs, env should point directly to correct path.
     url = `${base}/api/v2/entries/en/${encodeURIComponent(word)}`;
   }
 
-  const res = await fetch(url, {
-    headers: {
-      "Accept": "application/json",
-    },
-  });
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: "application/json" } });
+  } catch (err) {
+    // If custom backend failed (network or CORS), try public API as a fallback
+    if (!isPublic) {
+      const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(
+        word
+      )}`;
+      const fbRes = await fetch(fallbackUrl, {
+        headers: { Accept: "application/json" },
+      });
+      if (!fbRes.ok) {
+        throw new Error(`Request failed with status ${fbRes.status}`);
+      }
+      const fbData = await fbRes.json();
+      return normalizePublicApi(fbData);
+    }
+    throw err;
+  }
 
   if (!res.ok) {
-    // Try to extract error message if provided
-    let msg = `Request failed with status ${res.status}`;
-    try {
-      const data = await res.json();
-      if (data && (data.title || data.message)) {
-        msg = `${data.title || "Error"}: ${data.message || ""}`.trim();
+    // On custom backend failure, fallback to public API; on public, throw
+    if (!isPublic) {
+      const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(
+        word
+      )}`;
+      const fbRes = await fetch(fallbackUrl, {
+        headers: { Accept: "application/json" },
+      });
+      if (!fbRes.ok) {
+        // Try to read error message if any
+        let msg = `Request failed with status ${fbRes.status}`;
+        try {
+          const errJson = await fbRes.json();
+          if (errJson && (errJson.title || errJson.message)) {
+            msg = `${errJson.title || "Error"}: ${errJson.message || ""}`.trim();
+          }
+        } catch (_) {}
+        throw new Error(msg);
       }
-    } catch (_) {
-      // ignore json parse errors and keep generic message
+      const fbData = await fbRes.json();
+      return normalizePublicApi(fbData);
+    } else {
+      let msg = `Request failed with status ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && (data.title || data.message)) {
+          msg = `${data.title || "Error"}: ${data.message || ""}`.trim();
+        }
+      } catch (_) {}
+      throw new Error(msg);
     }
-    throw new Error(msg);
   }
 
-  return res.json();
+  const data = await res.json();
+  if (!isPublic) {
+    return normalizeCustomApi(data);
+  }
+  return normalizePublicApi(data);
 }

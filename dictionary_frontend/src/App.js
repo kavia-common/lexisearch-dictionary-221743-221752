@@ -46,7 +46,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef(null);
   const listRef = useRef(null);
-  const controllerRef = useRef(0); // simple request id to avoid race conditions
+  const controllerRef = useRef(0);
   const debounceRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -83,7 +83,6 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
     debounceRef.current = setTimeout(async () => {
       const currentId = ++controllerRef.current;
       const data = await fetchSuggestions(q);
-      // Only update if still latest
       if (currentId === controllerRef.current) {
         setSuggestions(data);
         setShowSuggestions(true);
@@ -113,7 +112,6 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
         return next < 0 ? -1 : next;
       });
     } else if (e.key === "Enter") {
-      // If a suggestion is highlighted, use it; otherwise submit as-is
       if (activeIndex >= 0 && activeIndex < suggestions.length) {
         e.preventDefault();
         const chosen = suggestions[activeIndex];
@@ -165,33 +163,25 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
       if (finalTranscript) {
         const t = finalTranscript.trim();
         setValue(t);
-        // auto-submit on final
         if (t.length > 0) {
           onSubmit(t);
           setShowSuggestions(false);
         }
       } else if (interim) {
-        // update input with interim to show live dictation
-        setValue((prev) => {
-          // replace only if interim is longer than prev to avoid jumping
-          return interim;
-        });
+        setValue(() => interim);
       }
     };
 
     recognitionRef.current = recognition;
     try {
       recognition.start();
-    } catch (_) {
-      // some browsers throw if start called twice quickly
-    }
+    } catch (_) {}
   };
 
   const stopListening = () => {
     try {
       recognitionRef.current && recognitionRef.current.stop();
     } catch (_) {
-      // no-op
     } finally {
       setListening(false);
     }
@@ -271,9 +261,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
               </span>
             </div>
             {loadingSug ? (
-              <div className="suggestions__status">
-                Loading suggestions…
-              </div>
+              <div className="suggestions__status">Loading suggestions…</div>
             ) : suggestions.length === 0 ? (
               <div className="suggestions__status">No matches</div>
             ) : (
@@ -291,7 +279,6 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
                     aria-selected={i === activeIndex}
                     className="suggestion-item"
                     onMouseDown={(e) => {
-                      // prevent input blur before click handler
                       e.preventDefault();
                     }}
                     onClick={() => selectSuggestion(s)}
@@ -306,8 +293,7 @@ function SearchBar({ onSubmit, defaultValue = "" }) {
         )}
       </div>
       <p className="search__hint">
-        Tip: Try words like “serendipity”, “benevolent”, or “ocean”. Press
-        <span> </span>
+        Tip: Try words like “serendipity”, “benevolent”, or “ocean”. Press{" "}
         <kbd>Enter</kbd> to search.
       </p>
     </form>
@@ -324,14 +310,14 @@ function AudioButton({ url, label = "Play pronunciation" }) {
   );
 }
 
-function MeaningCard({ meaning }) {
+function MeaningCard({ meaning, onChipClick }) {
   const partOfSpeech = safeString(meaning.partOfSpeech);
   const definitions = safeArray(meaning.definitions);
   const synonyms = safeArray(meaning.synonyms);
   const antonyms = safeArray(meaning.antonyms);
 
   return (
-    <div className="card">
+    <div className="card" role="article" aria-label={`Meanings: ${partOfSpeech || "unknown part of speech"}`}>
       <div className="card__header">
         <span className="pos">{partOfSpeech || "—"}</span>
       </div>
@@ -355,11 +341,18 @@ function MeaningCard({ meaning }) {
           {synonyms.length > 0 && (
             <div className="chips__group">
               <span className="chips__label">Synonyms</span>
-              <div className="chips__wrap">
+              <div className="chips__wrap" role="list">
                 {synonyms.map((s, i) => (
-                  <span key={`syn-${i}`} className="chip chip--syn">
+                  <button
+                    key={`syn-${i}`}
+                    className="chip chip--syn"
+                    role="listitem"
+                    onClick={() => onChipClick && onChipClick(s)}
+                    aria-label={`Search synonym ${s}`}
+                    title={`Search synonym: ${s}`}
+                  >
                     {s}
-                  </span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -367,11 +360,18 @@ function MeaningCard({ meaning }) {
           {antonyms.length > 0 && (
             <div className="chips__group">
               <span className="chips__label">Antonyms</span>
-              <div className="chips__wrap">
+              <div className="chips__wrap" role="list">
                 {antonyms.map((a, i) => (
-                  <span key={`ant-${i}`} className="chip chip--ant">
+                  <button
+                    key={`ant-${i}`}
+                    className="chip chip--ant"
+                    role="listitem"
+                    onClick={() => onChipClick && onChipClick(a)}
+                    aria-label={`Search antonym ${a}`}
+                    title={`Search antonym: ${a}`}
+                  >
                     {a}
-                  </span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -382,7 +382,7 @@ function MeaningCard({ meaning }) {
   );
 }
 
-function Result({ item }) {
+function Result({ item, onChipClick }) {
   const word = safeString(item.word);
   const phonetic = safeString(item.phonetic);
   const phonetics = safeArray(item.phonetics);
@@ -395,7 +395,7 @@ function Result({ item }) {
   }, [phonetics]);
 
   return (
-    <section className="result">
+    <section className="result" role="region" aria-label={`Results for ${word}`}>
       <header className="result__header">
         <div className="result__word">
           <h2 className="word">{word}</h2>
@@ -410,7 +410,9 @@ function Result({ item }) {
         {meanings.length === 0 ? (
           <div className="empty">No meanings found.</div>
         ) : (
-          meanings.map((m, idx) => <MeaningCard key={idx} meaning={m} />)
+          meanings.map((m, idx) => (
+            <MeaningCard key={idx} meaning={m} onChipClick={onChipClick} />
+          ))
         )}
       </div>
     </section>
@@ -427,7 +429,7 @@ function App() {
    * Includes loading, error, and empty states.
    */
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]); // Raw array from API
+  const [results, setResults] = useState([]); // normalized entries
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -444,21 +446,22 @@ function App() {
     setResults([]);
     try {
       const data = await fetchDefinitions(word);
-      // API returns an array of entries on success; on error, an object with title/message
-      if (Array.isArray(data)) {
+      // fetchDefinitions now always returns normalized array on success
+      if (Array.isArray(data) && data.length > 0) {
         setResults(data);
       } else {
-        // Unexpected structure -> treat as error message if present
-        const msg =
-          safeString(data?.message) ||
-          safeString(data?.title) ||
-          "No results found.";
-        setError(msg);
+        setError("No results found.");
       }
     } catch (e) {
       setError(e?.message || "Unable to fetch definitions.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleChipClick = (w) => {
+    if (typeof w === "string" && w.trim().length > 0) {
+      handleSearch(w.trim());
     }
   };
 
@@ -476,7 +479,7 @@ function App() {
 
         <section className="status-area" aria-live="polite">
           {loading && (
-            <div className="status status--loading">
+            <div className="status status--loading" role="status" aria-busy="true">
               <span className="spinner" aria-hidden="true" />
               <span>Searching the depths…</span>
             </div>
@@ -487,21 +490,21 @@ function App() {
             </div>
           )}
           {!loading && !error && results.length === 0 && query.length === 0 && (
-            <div className="status status--hint">
+            <div className="status status--hint" role="note">
               Start by typing a word above to see results.
             </div>
           )}
           {!loading && !error && results.length === 0 && query.length > 0 && (
-            <div className="status status--hint">
+            <div className="status status--hint" role="note">
               No results yet. Try a different word.
             </div>
           )}
         </section>
 
         {!loading && !error && results.length > 0 && (
-          <section className="results">
+          <section className="results" aria-label="Search results">
             {results.map((r, idx) => (
-              <Result key={idx} item={r} />
+              <Result key={idx} item={r} onChipClick={handleChipClick} />
             ))}
           </section>
         )}
