@@ -485,6 +485,8 @@ function App() {
   const [results, setResults] = useState([]); // normalized entries
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Track if at least one explicit search has completed to avoid premature "no results" hints
+  const [hasSearched, setHasSearched] = useState(false);
   const [history, setHistory] = useState(() => getHistory());
   const [favorites, setFavorites] = useState(() => getFavorites());
   const [panelsOpen, setPanelsOpen] = useState({ history: true, favorites: true });
@@ -625,6 +627,7 @@ function App() {
       setError(e?.message || "Unable to fetch definitions.");
     } finally {
       setLoading(false);
+      setHasSearched(true);
     }
   };
 
@@ -780,7 +783,7 @@ function App() {
               {t(lang, "start_prompt")}
             </div>
           )}
-          {!loading && !error && results.length === 0 && query.length > 0 && (
+          {!loading && !error && results.length === 0 && query.length > 0 && hasSearched && (
             <div className="status status--hint" role="note">
               {t(lang, "no_results_yet")}
             </div>
