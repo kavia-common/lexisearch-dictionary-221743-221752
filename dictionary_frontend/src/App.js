@@ -2,6 +2,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import "./App.css";
 import { fetchDefinitions, getApiBaseUrl } from "./api";
 import { fetchSuggestions } from "./suggestions";
+import {
+  addToHistory,
+  clearFavorites,
+  clearHistory,
+  getFavorites,
+  getHistory,
+  isFavorite,
+  removeFavorite,
+  removeFromHistory,
+  timeAgo,
+  toggleFavorite,
+} from "./storage";
 
 // Helpers for safe access
 const safeArray = (val) => (Array.isArray(val) ? val : []);
@@ -401,8 +413,9 @@ function Result({ item, onChipClick }) {
           <h2 className="word">{word}</h2>
           {phonetic && <span className="phonetic">/{phonetic}/</span>}
         </div>
-        <div className="result__audio">
+        <div className="result__meta">
           <AudioButton url={audioUrl} />
+          {/* Favorite star is injected by parent via CSS sibling; placeholder for alignment */}
         </div>
       </header>
 
@@ -432,12 +445,22 @@ function App() {
   const [results, setResults] = useState([]); // normalized entries
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState(() => getHistory());
+  const [favorites, setFavorites] = useState(() => getFavorites());
+  const [panelsOpen, setPanelsOpen] = useState({ history: true, favorites: true });
 
   // Apply subtle page theme background via body class
   useEffect(() => {
     document.body.classList.add("ocean-bg");
     return () => document.body.classList.remove("ocean-bg");
   }, []);
+
+  // Ensure chips update history too
+  useEffect(() => {
+    if (results && results.length > 0 && query) {
+      // We already updated history on successful search in handleSearch
+    }
+  }, [results, query]);
 
   const handleSearch = async (word) => {
     setQuery(word);
@@ -449,6 +472,8 @@ function App() {
       // fetchDefinitions now always returns normalized array on success
       if (Array.isArray(data) && data.length > 0) {
         setResults(data);
+        // Update history with normalized word key
+        setHistory(addToHistory(word));
       } else {
         setError("No results found.");
       }
@@ -461,6 +486,7 @@ function App() {
 
   const handleChipClick = (w) => {
     if (typeof w === "string" && w.trim().length > 0) {
+      // handleSearch will add to history on success
       handleSearch(w.trim());
     }
   };
@@ -502,11 +528,150 @@ function App() {
         </section>
 
         {!loading && !error && results.length > 0 && (
-          <section className="results" aria-label="Search results">
-            {results.map((r, idx) => (
-              <Result key={idx} item={r} onChipClick={handleChipClick} />
-            ))}
-          </section>
+          <>
+            <section className="results" aria-label="Search results">
+              {results.map((r, idx) => {
+                const w = (r?.word || "").toString();
+                const fav = isFavorite(w);
+                return (
+                  <div key={idx} style={{ position: "relative" }}>
+                    <Result item={r} onChipClick={handleChipClick} />
+                    <div style={{ position: "absolute", top: 14, right: 18 }}>
+                      <button
+                        className="star-btn"
+                        aria-label={fav ? "Unfavorite word" : "Favorite word"}
+                        aria-pressed={fav}
+                        title={fav ? "Unfavorite" : "Add to favorites"}
+                        onClick={() => {
+                          const res = toggleFavorite(w);
+                          setFavorites(res.list);
+                        }}
+                      >
+                        {fav ? "★" : "☆"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+
+            <section className="panels" aria-label="History and Favorites">
+              {/* History Panel */}
+              <aside className="panel" aria-label="Recent Searches">
+                <div className="panel__header">
+                  <div className="panel__title" role="heading" aria-level={2}>
+                    🕘 <span>Recent Searches</span>
+                  </div>
+                  <div className="panel__actions">
+                    <button
+                      className="icon-btn"
+                      onClick={() =>
+                        setPanelsOpen((p) => ({ ...p, history: !p.history }))
+                      }
+                      aria-label={panelsOpen.history ? "Collapse history" : "Expand history"}
+                    >
+                      {panelsOpen.history ? "▾" : "▸"}
+                    </button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setHistory(clearHistory())}
+                      aria-label="Clear all history"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+                {panelsOpen.history && (
+                  <div className="panel__body">
+                    {history.length === 0 ? (
+                      <div className="empty">No recent searches.</div>
+                    ) : (
+                      <ul className="list" role="list">
+                        {history.map((h, i) => (
+                          <li key={`h-${i}`} className="list__item">
+                            <button
+                              className="list__action"
+                              aria-label={`Search ${h.term}`}
+                              onClick={() => handleSearch(h.term)}
+                            >
+                              Go
+                            </button>
+                            <span className="list__term">{h.term}</span>
+                            <span className="list__meta">{timeAgo(h.ts)}</span>
+                            <button
+                              className="list__action"
+                              aria-label={`Remove ${h.term} from history`}
+                              onClick={() => setHistory(removeFromHistory(h.term))}
+                              title="Remove"
+                            >
+                              ✕
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </aside>
+
+              {/* Favorites Panel */}
+              <aside className="panel" aria-label="Favorite Words">
+                <div className="panel__header">
+                  <div className="panel__title" role="heading" aria-level={2}>
+                    ⭐ <span>Favorites</span>
+                  </div>
+                  <div className="panel__actions">
+                    <button
+                      className="icon-btn"
+                      onClick={() =>
+                        setPanelsOpen((p) => ({ ...p, favorites: !p.favorites }))
+                      }
+                      aria-label={panelsOpen.favorites ? "Collapse favorites" : "Expand favorites"}
+                    >
+                      {panelsOpen.favorites ? "▾" : "▸"}
+                    </button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setFavorites(clearFavorites())}
+                      aria-label="Clear all favorites"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+                {panelsOpen.favorites && (
+                  <div className="panel__body">
+                    {favorites.length === 0 ? (
+                      <div className="empty">No favorites yet.</div>
+                    ) : (
+                      <ul className="list" role="list">
+                        {favorites.map((w, i) => (
+                          <li key={`f-${i}`} className="list__item">
+                            <button
+                              className="list__action"
+                              aria-label={`Search ${w}`}
+                              onClick={() => handleSearch(w)}
+                            >
+                              Go
+                            </button>
+                            <span className="list__term">{w}</span>
+                            <button
+                              className="list__action"
+                              aria-label={`Remove ${w} from favorites`}
+                              onClick={() => setFavorites(removeFavorite(w))}
+                              title="Remove"
+                            >
+                              ✕
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </aside>
+            </section>
+          </>
         )}
       </main>
 
