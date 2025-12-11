@@ -1,4 +1,4 @@
-/**
+ /**
  * API client for dictionary lookups with environment-aware base URL and normalization.
  * Provides one normalized response shape to avoid UI crashes across backends.
  */
@@ -190,4 +190,81 @@ export async function fetchDefinitions(word) {
     return normalizeCustomApi(data);
   }
   return normalizePublicApi(data);
+}
+
+/**
+ * Word of the Day helpers
+ */
+
+// PUBLIC_INTERFACE
+export function getWotdBackendUrl() {
+  /**
+   * Returns the full WOTD endpoint if a custom backend base is configured, else null.
+   * Endpoint: GET <BASE>/word-of-the-day
+   */
+  const base = getApiBaseUrl();
+  if (!/dictionaryapi\.dev/i.test(base)) {
+    return `${base}/word-of-the-day`;
+  }
+  return null;
+}
+
+// PUBLIC_INTERFACE
+export async function fetchWotdFromBackend() {
+  /**
+   * Tries to fetch WOTD from custom backend if available.
+   * Expected response: { word, meanings:[{partOfSpeech, definition, example}], phonetics:[{text, audio}] }
+   * Returns normalized array [{word, phonetic, phonetics, meanings}] on success, or null if not available/404.
+   */
+  const url = getWotdBackendUrl();
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      return null;
+    }
+    const data = await res.json();
+    // Normalize single-object to array using normalizeCustomApi
+    const normalized = normalizeCustomApi(data);
+    return normalized;
+  } catch (_) {
+    return null;
+  }
+}
+
+// PUBLIC_INTERFACE
+export function curatedWords() {
+  /**
+   * Returns a small curated list of nice words for fallback WOTD selection.
+   */
+  return [
+    "serendipity",
+    "eloquent",
+    "ephemeral",
+    "benevolent",
+    "luminous",
+    "resilience",
+    "mellifluous",
+    "zenith",
+    "aesthetic",
+    "solace",
+    "vernacular",
+    "catharsis",
+  ];
+}
+
+// PUBLIC_INTERFACE
+export function dailyIndex(dateStr, modulo) {
+  /**
+   * Deterministically pick an index for given date string YYYY-MM-DD within modulo range.
+   * Uses a simple DJB2-like hash.
+   */
+  const s = (dateStr || "").toString();
+  let hash = 5381;
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) + hash) ^ s.charCodeAt(i);
+  }
+  const idx = Math.abs(hash) % Math.max(1, modulo);
+  return idx;
 }

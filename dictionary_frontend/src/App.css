@@ -322,6 +322,90 @@ kbd {
   gap: 18px;
 }
 
+/* Word of the Day Card */
+.wotd {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+@media (min-width: 900px) {
+  .wotd {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.wotd__card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.wotd__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(37,99,235,0.07), rgba(255,255,255,1));
+  border-bottom: 1px solid var(--border);
+}
+
+.wotd__title {
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wotd__actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.wotd__body {
+  padding: 14px 16px 16px;
+}
+
+.wotd__word {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wotd__word h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.wotd__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wotd__buttons {
+  margin-top: 12px;
+  display: inline-flex;
+  gap: 10px;
+}
+
+.btn--amber {
+  color: #111827;
+  background: linear-gradient(135deg, var(--amber), var(--amber-600));
+  color: white;
+}
+
+.btn--small {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  box-shadow: 0 4px 10px rgba(245, 158, 11, 0.2);
+}
+
 /* Panels: History and Favorites */
 .panels {
   margin-top: 18px;

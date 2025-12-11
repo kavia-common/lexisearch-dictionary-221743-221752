@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import { fetchDefinitions, getApiBaseUrl } from "./api";
+import {
+  fetchDefinitions,
+  getApiBaseUrl,
+  fetchWotdFromBackend,
+  curatedWords,
+  dailyIndex,
+} from "./api";
 import { fetchSuggestions } from "./suggestions";
 import {
   addToHistory,
@@ -432,7 +438,7 @@ function Result({ item, onChipClick }) {
   );
 }
 
-// PUBLIC_INTERFACE
+ // PUBLIC_INTERFACE
 function App() {
   /**
    * Main App with single-page layout:
@@ -449,6 +455,11 @@ function App() {
   const [favorites, setFavorites] = useState(() => getFavorites());
   const [panelsOpen, setPanelsOpen] = useState({ history: true, favorites: true });
 
+  // WOTD State
+  const [wotd, setWotd] = useState(null); // normalized single entry {word, phonetic, phonetics, meanings}
+  const [wotdLoading, setWotdLoading] = useState(true);
+  const [wotdError, setWotdError] = useState("");
+
   // Apply subtle page theme background via body class
   useEffect(() => {
     document.body.classList.add("ocean-bg");
@@ -461,6 +472,97 @@ function App() {
       // We already updated history on successful search in handleSearch
     }
   }, [results, query]);
+
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, "0");
+    const day = `${d.getDate()}`.padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  // Safe localStorage helpers for WOTD
+  const lsKey = "ls_wotd_v1";
+  const readWotdCache = useCallback(() => {
+    try {
+      const raw = window.localStorage.getItem(lsKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if (parsed.date !== todayStr) return null;
+      return parsed.payload || null;
+    } catch (_) {
+      return null;
+    }
+  }, [todayStr]);
+
+  const writeWotdCache = useCallback((payload, dateStr) => {
+    try {
+      window.localStorage.setItem(
+        lsKey,
+        JSON.stringify({ date: dateStr, payload })
+      );
+    } catch (_) {
+      // ignore
+    }
+  }, []);
+
+  const pickCuratedWord = useCallback(() => {
+    const list = curatedWords();
+    const idx = dailyIndex(todayStr, list.length);
+    return list[idx];
+  }, [todayStr]);
+
+  // PUBLIC_INTERFACE
+  async function loadWotd({ forceRefresh = false } = {}) {
+    /**
+     * Load WOTD:
+     * 1) Use cache if present for today and not forcing refresh.
+     * 2) Try backend GET /word-of-the-day if custom base configured.
+     * 3) Fallback: deterministically pick curated word and fetch its definitions.
+     */
+    setWotdLoading(true);
+    setWotdError("");
+    try {
+      if (!forceRefresh) {
+        const cached = readWotdCache();
+        if (cached && Array.isArray(cached) && cached.length > 0) {
+          setWotd(cached[0]);
+          setWotdLoading(false);
+          return;
+        }
+      }
+
+      // Try backend first
+      const fromBackend = await fetchWotdFromBackend();
+      if (fromBackend && fromBackend.length > 0 && fromBackend[0]?.word) {
+        setWotd(fromBackend[0]);
+        writeWotdCache(fromBackend, todayStr);
+        setWotdLoading(false);
+        return;
+      }
+
+      // Fallback: curated deterministic selection
+      const term = pickCuratedWord();
+      const defs = await fetchDefinitions(term);
+      if (Array.isArray(defs) && defs.length > 0) {
+        setWotd(defs[0]);
+        writeWotdCache(defs, todayStr);
+      } else {
+        setWotd(null);
+        writeWotdCache([], todayStr);
+      }
+    } catch (e) {
+      setWotdError(e?.message || "Unable to load Word of the Day.");
+    } finally {
+      setWotdLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadWotd({ forceRefresh: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayStr]);
 
   const handleSearch = async (word) => {
     setQuery(word);
@@ -501,6 +603,119 @@ function App() {
             Definitions, pronunciation, synonyms and antonyms – all in one place.
           </p>
           <SearchBar onSubmit={handleSearch} />
+        </section>
+
+        {/* Word of the Day */}
+        <section className="wotd" aria-label="Word of the Day">
+          <div className="wotd__card" role="region" aria-label="Word of the Day card">
+            <div className="wotd__header">
+              <div className="wotd__title" role="heading" aria-level={2}>
+                🌅 <span>Word of the Day</span>
+              </div>
+              <div className="wotd__actions">
+                <button
+                  className="icon-btn"
+                  aria-label="Refresh word of the day"
+                  title="Refresh"
+                  onClick={() => loadWotd({ forceRefresh: true })}
+                >
+                  ⟳
+                </button>
+              </div>
+            </div>
+            <div className="wotd__body">
+              {wotdLoading ? (
+                <div className="status status--loading" role="status" aria-busy="true">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>Fetching today’s word…</span>
+                </div>
+              ) : wotdError ? (
+                <div className="status status--error" role="alert">
+                  {wotdError}
+                </div>
+              ) : !wotd ? (
+                <div className="empty">No word available. Try refresh.</div>
+              ) : (
+                <>
+                  <div className="wotd__word">
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                      <h3>{wotd.word}</h3>
+                      {wotd.phonetic ? (
+                        <span className="phonetic">/{wotd.phonetic}/</span>
+                      ) : null}
+                    </div>
+                    <div className="wotd__meta">
+                      {(() => {
+                        const p = (Array.isArray(wotd.phonetics) ? wotd.phonetics : []).find(
+                          (p) => p.audio
+                        );
+                        return p ? <AudioButton url={p.audio} label="Play WOTD pronunciation" /> : null;
+                      })()}
+                      <button
+                        className="star-btn"
+                        aria-label={isFavorite(wotd.word) ? "Unfavorite word" : "Favorite word"}
+                        aria-pressed={isFavorite(wotd.word)}
+                        title={isFavorite(wotd.word) ? "Unfavorite" : "Add to favorites"}
+                        onClick={() => {
+                          const res = toggleFavorite(wotd.word);
+                          setFavorites(res.list);
+                        }}
+                      >
+                        {isFavorite(wotd.word) ? "★" : "☆"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Show first meaning/definition */}
+                  {Array.isArray(wotd.meanings) && wotd.meanings.length > 0 ? (
+                    <div className="card" role="article" aria-label="Primary meaning">
+                      <div className="card__header">
+                        <span className="pos">
+                          {wotd.meanings[0]?.partOfSpeech || "—"}
+                        </span>
+                      </div>
+                      <div className="card__body">
+                        <ol className="definitions">
+                          {Array.isArray(wotd.meanings[0]?.definitions) &&
+                          wotd.meanings[0].definitions.length > 0 ? (
+                            <>
+                              <li className="definition">
+                                <div className="definition__text">
+                                  {wotd.meanings[0].definitions[0]?.definition || ""}
+                                </div>
+                                {wotd.meanings[0].definitions[0]?.example ? (
+                                  <div className="definition__example">
+                                    “{wotd.meanings[0].definitions[0].example}”
+                                  </div>
+                                ) : null}
+                              </li>
+                            </>
+                          ) : (
+                            <li className="definition">
+                              <div className="definition__text">No definition available.</div>
+                            </li>
+                          )}
+                        </ol>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty">No meanings found.</div>
+                  )}
+
+                  <div className="wotd__buttons">
+                    <button
+                      className="btn btn--amber btn--small"
+                      aria-label={`Use this word ${wotd.word}`}
+                      onClick={() => handleSearch(wotd.word)}
+                      title="Use this word"
+                    >
+                      Use this word
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </section>
 
         <section className="status-area" aria-live="polite">
