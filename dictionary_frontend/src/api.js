@@ -143,7 +143,7 @@ export async function fetchDefinitions(word) {
   }
 
   if (!res.ok) {
-    // On custom backend failure, fallback to public API; on public, throw
+    // On custom backend failure, fallback to public API; on public, handle 404 as "no results"
     if (!isPublic) {
       const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(
         word
@@ -160,11 +160,20 @@ export async function fetchDefinitions(word) {
             msg = `${errJson.title || "Error"}: ${errJson.message || ""}`.trim();
           }
         } catch (_) {}
+        // If the public API reports 404, treat it as no results instead of throwing
+        if (fbRes.status === 404) {
+          return [];
+        }
         throw new Error(msg);
       }
       const fbData = await fbRes.json();
       return normalizePublicApi(fbData);
     } else {
+      // Public API branch
+      if (res.status === 404) {
+        // 404 from dictionaryapi.dev indicates no match; return empty list gracefully
+        return [];
+      }
       let msg = `Request failed with status ${res.status}`;
       try {
         const data = await res.json();
